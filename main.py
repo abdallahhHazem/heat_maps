@@ -11,6 +11,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from geopy.distance import geodesic
 import json
+import os
 
 # Set page config
 st.set_page_config(page_title="Restaurant Analytics Dashboard", layout="wide")
@@ -30,17 +31,18 @@ class RestaurantAnalyzer:
         # Clean and prepare data
         self.data = self.data.dropna(subset=['lat', 'lon'])
 
-        # Add cuisine extraction if 'name' contains cuisine info
-        # You might need to customize this based on your actual data
-        self.extract_cuisine_info()
+        # Handle cuisine column
+        self.handle_cuisine_data()
 
-    def extract_cuisine_info(self):
-        """Extract cuisine information from restaurant names or add sample cuisines"""
-        # This is a placeholder - you'll need to adapt based on your actual data
-        cuisines = ['Italian', 'Chinese', 'American', 'Mexican', 'Indian', 'Thai', 'Japanese', 'French', 'Greek',
-                    'Pizza']
-        np.random.seed(42)
-        self.data['cuisine'] = np.random.choice(cuisines, size=len(self.data))
+    def handle_cuisine_data(self):
+        """Handle cuisine data - use existing column or mark as Unknown"""
+        if 'cuisine' not in self.data.columns or self.data['cuisine'].isna().all():
+            st.warning("No cuisine column found or all values are null. Setting all cuisines to 'Unknown'.")
+            self.data['cuisine'] = 'Unknown'
+        else:
+            # Clean existing cuisine data
+            self.data['cuisine'] = self.data['cuisine'].fillna('Unknown')
+            st.info(f"Using existing cuisine column with {self.data['cuisine'].nunique()} unique cuisines.")
 
     def create_heatmap(self, filtered_data=None, zoom_level=10):
         """Create interactive heatmap with Folium"""
@@ -97,9 +99,6 @@ class RestaurantAnalyzer:
         for i in range(n_clusters):
             cluster_data = data_with_clusters[data_with_clusters['cluster'] == i]
             if len(cluster_data) > 0:
-                # Create convex hull for cluster (simplified polygon)
-                cluster_coords = cluster_data[['lat', 'lon']].values
-
                 # Add circle markers for each cluster
                 for idx, row in cluster_data.iterrows():
                     folium.CircleMarker(
@@ -112,7 +111,7 @@ class RestaurantAnalyzer:
                     ).add_to(m)
 
                 # Add cluster center
-                center = cluster_coords.mean(axis=0)
+                center = cluster_data[['lat', 'lon']].values.mean(axis=0)
                 folium.Marker(
                     location=center,
                     popup=f"Cluster {i} Center<br>{len(cluster_data)} restaurants",
@@ -172,53 +171,118 @@ class RestaurantAnalyzer:
         return plots
 
 
-# Streamlit App
+def load_default_data():
+    """Try to load default data from repository"""
+    try:
+        # Try to load from heat_maps folder
+        possible_paths = [
+            'heat_maps/restaurants.csv',
+            'heat_maps/restaurant_data.csv',
+            'restaurants.csv',
+            'restaurant_data.csv'
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                return pd.read_csv(path)
+
+        # If no specific file found, look for any CSV in heat_maps folder
+        if os.path.exists('heat_maps'):
+            csv_files = [f for f in os.listdir('heat_maps') if f.endswith('.csv')]
+            if csv_files:
+                return pd.read_csv(f'heat_maps/{csv_files[0]}')
+
+        return None
+    except Exception as e:
+        st.error(f"Error loading default data: {e}")
+        return None
+
+
 def main():
     st.title("🗺️ Restaurant Heatmap & Analytics Dashboard")
-    st.markdown("Upload your restaurant data to create interactive heatmaps and analyze cuisine distributions!")
+    st.markdown("Analyze restaurant data with interactive heatmaps and cuisine distributions!")
 
     # Initialize analyzer
     if 'analyzer' not in st.session_state:
         st.session_state.analyzer = RestaurantAnalyzer()
 
-    # File upload
-    uploaded_file = st.file_uploader("Upload your restaurant CSV file", type=['csv'])
+    # Try to load default data first
+    if st.session_state.analyzer.data is None:
+        default_data = load_default_data()
+        if default_data is not None:
+            st.session_state.analyzer.load_data(default_data)
+            st.success("Restaurant data loaded successfully!")
+        else:
+            st.warning("No default data found. Please upload a CSV file.")
 
-    # Sample data option
-    if st.button("Use Sample Data"):
-        # Create sample data
-        np.random.seed(42)
-        sample_data = pd.DataFrame({
-            'original_index': range(100),
-            'name': [f'Restaurant {i}' for i in range(100)],
-            'zone': np.random.choice(['Zone A', 'Zone B', 'Zone C'], 100),
-            'lat': np.random.normal(40.7128, 0.1, 100),  # Around NYC
-            'lon': np.random.normal(-74.0060, 0.1, 100),
-            'geocode_query_used': ['query'] * 100,
-            'geocode_source': ['source'] * 100,
-            'geocode_success': [True] * 100
-        })
-        st.session_state.analyzer.load_data(sample_data)
-        st.success("Sample data loaded!")
+    # File upload section
+    st.subheader("📁 Upload Custom Data")
+    uploaded_file = st.file_uploader("Upload your restaurant CSV file", type=['csv'])
 
     if uploaded_file is not None:
         data = pd.read_csv(uploaded_file)
         st.session_state.analyzer.load_data(data)
-        st.success("Data loaded successfully!")
+        st.success("Custom data uploaded successfully!")
 
+    # Load from URL option
+    with st.expander("🌐 Load Data from URL"):
+        url = st.text_input("Enter CSV URL (Google Sheets, GitHub raw file, etc.)")
+        if url and st.button("Load from URL"):
+            try:
+                data = pd.read_csv(url)
+                st.session_state.analyzer.load_data(data)
+                st.success("Data loaded from URL successfully!")
+            except Exception as e:
+                st.error(f"Error loading from URL: {e}")
+
+    # Instructions for Google Sheets
+    with st.expander("📊 Google Sheets Instructions"):
+        st.markdown("""
+        **To use Google Sheets data:**
+        1. Make your Google Sheet public (Share → Anyone with the link can view)
+        2. Get the share link
+        3. Replace `/edit#gid=0` with `/export?format=csv&gid=0`
+        4. Use the modified URL above
+
+        **Example transformation:**
+        - Original: `https://docs.google.com/spreadsheets/d/ABC123/edit#gid=0`
+        - Use: `https://docs.google.com/spreadsheets/d/ABC123/export?format=csv&gid=0`
+        """)
+
+    # Main analysis section
     if st.session_state.analyzer.data is not None:
         data = st.session_state.analyzer.data
 
+        # Display data info
+        st.subheader("📊 Data Overview")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Restaurants", len(data))
+        with col2:
+            st.metric("Unique Cuisines", data['cuisine'].nunique())
+        with col3:
+            if 'zone' in data.columns:
+                st.metric("Unique Zones", data['zone'].nunique())
+            else:
+                st.metric("Data Points", len(data))
+        with col4:
+            st.metric("Columns", len(data.columns))
+
+        # Show cuisine distribution summary
+        st.subheader("🍽️ Cuisine Distribution Summary")
+        cuisine_summary = data['cuisine'].value_counts().head(10)
+        st.bar_chart(cuisine_summary)
+
         # Sidebar filters
-        st.sidebar.header("Filters")
+        st.sidebar.header("🔍 Filters")
 
         # Cuisine filter
-        cuisines = ['All'] + list(data['cuisine'].unique())
+        cuisines = ['All'] + sorted(list(data['cuisine'].unique()))
         selected_cuisines = st.sidebar.multiselect("Select Cuisines", cuisines, default=['All'])
 
         # Zone filter if exists
         if 'zone' in data.columns:
-            zones = ['All'] + list(data['zone'].unique())
+            zones = ['All'] + sorted(list(data['zone'].unique()))
             selected_zones = st.sidebar.multiselect("Select Zones", zones, default=['All'])
 
         # Apply filters
@@ -229,19 +293,12 @@ def main():
         if 'zone' in data.columns and 'All' not in selected_zones and selected_zones:
             filtered_data = filtered_data[filtered_data['zone'].isin(selected_zones)]
 
-        # Display data info
-        st.subheader("Data Overview")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Restaurants", len(filtered_data))
-        with col2:
-            st.metric("Unique Cuisines", filtered_data['cuisine'].nunique())
-        with col3:
-            if 'zone' in filtered_data.columns:
-                st.metric("Unique Zones", filtered_data['zone'].nunique())
+        # Show filtered data info
+        if len(filtered_data) != len(data):
+            st.info(f"Filtered data: {len(filtered_data)} restaurants (from {len(data)} total)")
 
         # Tabs for different visualizations
-        tab1, tab2, tab3, tab4 = st.tabs(["🔥 Heatmap", "📊 Polygons", "🥘 Cuisine Analysis", "📈 Density Analysis"])
+        tab1, tab2, tab3, tab4 = st.tabs(["🔥 Heatmap", "📊 Clusters", "🥘 Cuisine Analysis", "📈 Density Analysis"])
 
         with tab1:
             st.subheader("Restaurant Heatmap")
@@ -253,7 +310,7 @@ def main():
                 st.warning("No data to display")
 
         with tab2:
-            st.subheader("Density Polygons (Clusters)")
+            st.subheader("Restaurant Clusters")
             n_clusters = st.slider("Number of Clusters", 2, 10, 5)
             polygon_map = st.session_state.analyzer.create_density_polygons(filtered_data, n_clusters)
             if polygon_map:
@@ -281,8 +338,42 @@ def main():
             st.plotly_chart(plots['histogram'], use_container_width=True)
 
         # Data table
-        with st.expander("View Raw Data"):
+        with st.expander("📋 View Raw Data"):
             st.dataframe(filtered_data)
+
+        # Download filtered data
+        if len(filtered_data) != len(data):
+            csv = filtered_data.to_csv(index=False)
+            st.download_button(
+                label="💾 Download Filtered Data as CSV",
+                data=csv,
+                file_name='filtered_restaurants.csv',
+                mime='text/csv'
+            )
+
+    else:
+        st.info("👆 Please upload a CSV file or ensure your data file is in the heat_maps folder to get started!")
+
+        # Show expected data format
+        with st.expander("📋 Expected Data Format"):
+            st.markdown("""
+            Your CSV file should contain at least these columns:
+            - **name**: Restaurant name
+            - **lat**: Latitude (decimal degrees)
+            - **lon**: Longitude (decimal degrees)
+            - **cuisine**: Cuisine type (optional - will be extracted from names if not provided)
+
+            **Optional columns:**
+            - **zone**: Geographic zone or area
+            - Any other columns will be preserved and displayed
+
+            **Example:**
+            ```
+            name,lat,lon,cuisine,zone
+            Mario's Pizza,40.7128,-74.0060,Italian,Manhattan
+            Golden Dragon,40.7589,-73.9851,Chinese,Manhattan
+            ```
+            """)
 
 
 if __name__ == "__main__":
