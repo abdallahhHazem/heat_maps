@@ -1,7 +1,9 @@
 streamlit
 pandas
-numpy
-scikit-learn
-geopy
 folium
 plotly
+numpy
+scikit-learn
+seaborn
+matplotlib
+geopy
